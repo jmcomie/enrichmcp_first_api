@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "enrichmcp-first-api"
+version = "0.1.0"
+description = ""
+authors = ["Justin McOmie <justin.mcomie@gmail.com>"]
+readme = "README.md"
+packages = [{include = "enrichmcp_first_api"}]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+enrichmcp = {extras = ["sqlalchemy"], version = "^0.4.0"}
+fastmcp = "^2.8.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
