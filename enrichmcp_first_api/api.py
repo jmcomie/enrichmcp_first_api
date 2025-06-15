@@ -98,8 +98,9 @@ def model_string_from_fields(name: str, model_fields: list[ModelField]) -> str:
     model_str: str = f"""\
 from enrichmcp import EnrichMCP, EnrichModel
 from pydantic import Field
+from enrichmcp_first_api.model import WorldBuilderEntity
 
-class {name}(EnrichModel):
+class {name}(WorldBuilderEntity):
     \"\"\"A pydantic model named {name} with fields: {', '.join([field.name for field in model_fields])}.\"\"\"
 """
     for field in model_fields:
@@ -133,7 +134,7 @@ def import_module_from_path(module_name, module_path):
             # Apply the decorator manually
             decorated_class = app.entity(obj)
             setattr(module, name, decorated_class)
-    
+            MODELS.append(decorated_class)
     return module
 
 
@@ -243,15 +244,19 @@ def get_enrichmcp_class(data_dict: dict) -> Type[EnrichMCP]:
 
 
 @app.entity(description="A container for an instance of a world builder entity and its identifier.")
-class InstanceWithId(EnrichMCP):
-    id: int
-    instance: WorldBuilderEntity
+class InstanceWithId(EnrichModel):
+    id: int = Field(description="The unique identifier for the instance of the world builder entity.")
+    instance: WorldBuilderEntity = Field(description="The instance of the world builder entity. This is a pydantic model that represents the data for the instance.")
 
 
 def get_instances_filepath() -> Path:
     if not CURRENT_OPEN_PROJECT:
         raise ValueError("No project is currently open. Please open a project before accessing instances.")
-    return get_path_to_project(CURRENT_OPEN_PROJECT.id) / INSTANCES_FILENAME
+    instances_filepath: Path = get_path_to_project(CURRENT_OPEN_PROJECT.id) / INSTANCES_FILENAME
+    if not instances_filepath.exists():
+        # Create the file with an empty list if it doesn't exist
+        instances_filepath.write_text(json.dumps([]), 'utf-8')
+    return instances_filepath
 
 
 @app.resource(description="Update the provided model instance by replacing the instance with the id with the given instance.")
@@ -259,12 +264,14 @@ def update_world_builder_entity_instance(id: int, instance: WorldBuilderEntity):
     instance_dicts: list[dict] =  json.loads(get_instances_filepath().read_text('utf-8'))
     try:
         instance_dicts[id] = instance.model_dump()
+        global LAST_UPDATED_INSTANCE_ID
+        LAST_UPDATED_INSTANCE_ID = id
         get_instances_filepath().write_text(json.dumps(instance_dicts), 'utf-8')
     except KeyError:
         return None
 
 
-@app.resource(description="")
+@app.resource(description="Fetch the instance of a world builder entity by its ID.")
 def get_instance_by_id(id: int) -> Optional[WorldBuilderEntity]:
     instance_dicts: list[dict] =  json.loads(get_instances_filepath().read_text('utf-8'))
     try:
@@ -276,11 +283,15 @@ def get_instance_by_id(id: int) -> Optional[WorldBuilderEntity]:
 def list_entity_instances(world_builder_entity_name: str) -> list[InstanceWithId]:
     """world_builder_entity_name is the exact class name of the correct pydantic model"""
     model_instances: list[InstanceWithId] = []
-    instance_dicts: list[dict] =  json.loads(get_instances_filepath(world_builder_entity_name).read_text('utf-8'))
+    instance_dicts: list[dict] =  json.loads(get_instances_filepath().read_text('utf-8'))
     for index, instance_dict in enumerate(instance_dicts):
          classname: Optional[str] = instance_dict.pop(CLASSNAME_FIELD_NAME)
+         if classname != world_builder_entity_name:
+             LOG.warning(f"Instance with ID {index} has class name {classname}, which does not match the requested entity name {world_builder_entity_name}. Skipping.")
+             continue
          cls: Type[WorldBuilderEntity] = get_world_builder_entity_class_by_name(classname)
          if cls is None:
+             LOG.warning(f"Could not find class {classname} for instance with ID {index}. Skipping.")
              continue
 
          model_instances.append(InstanceWithId(id=index, instance=cls.model_validate(instance_dict)))
@@ -300,12 +311,12 @@ RelationshipCardinality = Literal["one_to_one", "one_to_many", "many_to_one", "m
 
 
 
-@app.entity(description="A notice to the user. This is used to inform the user of important information, such as when a model is created or when a relationship is missing.")
-class Notice():
-    message: str
+@app.entity(description="A notice for the LLM to consider a directive, such as when some follow up action should be taken or considered.")
+class Notice(EnrichModel):
+    message: str = Field(description="A message for the LLM directing it to consider something.")
 
 
-@app.resource("Get the last inserted instance ID. This is used to retrieve the ID of the last instance that was inserted.")
+@app.resource(description="Get the last inserted instance ID. This is used to retrieve the ID of the last instance that was inserted.")
 def get_last_inserted_instance_id() -> Optional[int]:
     return LAST_INSERTED_INSTANCE_ID
 
@@ -320,13 +331,13 @@ def get_last_inserted_instance_id() -> Optional[int]:
 
 
 @app.entity(description="A relationship between two world builder entities. This is used to define the relationship schema.")
-class EntitySchemaRelationship():
+class EntitySchemaRelationship(EnrichModel):
     world_builder_entity_name_one: str = Field(description="Name of WorldBuildEntity, representing the first cardinality operand. i.e. the 'one' in a one-to-many relationship or the 'many' in a many-to-one relationship.")
     world_builder_entity_name_two: str = Field(description="Name of WorldBuildEntity, representing the second cardinality operand. i.e. the 'many' in a one-to-many relationship or the 'one' in a many-to-one relationship.")
     cardinality: RelationshipCardinality =  Field(description="The cardinality of the relationship. Supported values are 'one_to_one', 'one_to_many', 'many_to_one', 'many_to_many'.")
 
 @app.entity(description="A relationship between two instances of world builder entities.")
-class InstanceRelationship():
+class InstanceRelationship(EnrichModel):
     instance_id_one: int = Field(description="The ID of the first instance in the relationship.")
     instance_id_two: int = Field(description="The ID of the second instance in the relationship.")
 
@@ -348,13 +359,32 @@ def has_empty_relationship(instance: WorldBuilderEntity):
 
 
 
-@app.resource(description="Create a new instance of a world builder entity. This is an instance of a class .")
-def create_world_builder_entity_instance(instance: WorldBuilderEntity) -> Optional[Notice]:
-    instance_dicts: list[dict] =  json.loads(get_instances_filepath().read_text('utf-8'))
-    instance_dicts.append(instance)
-    get_instances_filepath(instance.__class__.__name__).write_text(json.dumps(instance_dicts), 'utf-8')
-    if has_empty_relationship(instance):
-        return Notice(message="Created.  Review prompt and add relationship data between two instances if applicable.")
+@app.resource(description="Create a new instance of a world builder entity. This is an dict containing data of one of the subclasses of WorldBuilderEntity, created with a call to create_world_builder_entity.")
+def create_world_builder_entity_instance(world_builder_entity_name: str, data_dict: dict) -> Optional[Notice]:
+    LOG.info(f"Creating instance of {data_dict}. Type: {type(data_dict)}")
+    LOG.info(f"Instance class name: {data_dict.__class__.__name__}")
+    LOG.info(f"Data for instance: {data_dict}")
+    LOG.info(f"World builder entity name: {world_builder_entity_name}")
+    if not data_dict:
+        LOG.warning("Instance data is empty.")
+        return Notice(message="Instance data is empty. Please provide valid data for the instance corresponding to the schema of the entity name.")
+    try:
+        instance = get_world_builder_entity_class_by_name(world_builder_entity_name).model_validate(data_dict)
+    except Exception as e:
+        LOG.error(f"Error validating instance data: {e}")
+        return Notice(message=f"Error validating instance data: {e}. Please provide valid data for the instance corresponding to the schema of the entity name.")
+    try:
+        instance_dicts: list[dict] =  json.loads(get_instances_filepath().read_text('utf-8'))
+        #return Notice(message="Success! Instance created.")
+        instance_dicts.append(instance.model_dump())
+        global LAST_INSERTED_INSTANCE_ID
+        LAST_INSERTED_INSTANCE_ID = len(instance_dicts) - 1
+        get_instances_filepath().write_text(json.dumps(instance_dicts), 'utf-8')
+    except Exception as e:
+        LOG.exception(f"Error writing instance data: {e}")
+        return Notice(message=f"Error writing instance data: {e}. Please try again.")
+    #if has_empty_relationship(instance):
+    #    return Notice(message="Success! Instance created. Now review prompt and add relationship data between two instances if applicable.")
 
 
 @app.resource

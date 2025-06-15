@@ -9,10 +9,11 @@ from pydantic import BaseModel
 # This exists to cue the LLM that the class was created
 # via an MCP tool and to hopefully lower the risk of
 # type-selection confusion when creating new instances.
-class WorldBuilderEntity(EnrichMCP):
+class WorldBuilderEntity(EnrichModel):
     """
     Model for world builder entities.
     """
-    class Config:
-        title = "World Builder Model"
-        description = "Base model for world builder entities in EnrichMCP."
+    #class Config:
+    #    title = "World Builder Model"
+    #    description = "Base model for world builder entities in EnrichMCP."
+    pass
