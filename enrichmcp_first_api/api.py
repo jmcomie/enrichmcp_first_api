@@ -2,6 +2,7 @@ from __future__ import annotations
 from datetime import date
 import json
 import os
+import time
 from typing import Literal, Optional
 from altair import Type
 from enrichmcp import EnrichMCP, EnrichModel, Relationship
@@ -142,7 +143,7 @@ def import_module_from_path(module_name, module_path, force_reload=False):
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module  # Optional: only if global/module cache needed
     spec.loader.exec_module(module)
-    
+
     # Apply entity decorator to all classes in the module
     for name in dir(module):
         obj = getattr(module, name)
@@ -461,11 +462,9 @@ def _add_relationship_to_entity_schema(relationship: EntitySchemaRelationship) -
             side_cardinality=side_cardinality,
             description=f"A relationship to {side_cardinality} {target} instance(s). {FORWARD_REF_SEMAPHORE}:{target}"
         ))
-        for model in MODELS:
-            if model.__name__ == entity_type.__name__:
-                # Update the model in the MODELS list
-                MODELS.remove(model)
-                break
+        global MODELS
+        MODELS = [model for model in MODELS if model.__name__ != entity_type.__name__]
+
         # Write the updated model to file
         write_model_to_file_and_import(entity_type.__name__, model_fields, relationships, force_reload=True)
 
@@ -485,7 +484,7 @@ def add_relationship_to_entity_schema(relationship: EntitySchemaRelationship) ->
     return Notice(message=f"Relationship {relationship.world_builder_entity_name_one} to {relationship.world_builder_entity_name_two} with cardinality {relationship.cardinality} added successfully.")
 
 
-@app.resource(description="Add a relationship between two world builder entities per their cardinality. e.g. if the relationship is one-to-many, then the first instance will have a list of second instances.")
+@app.resource(description="This is not currently fucntionality.  Do not call. Add a relationship between two world builder entities per their cardinality. e.g. if the relationship is one-to-many, then the first instance will have a list of second instances.")
 def add_relationship_between_instances(instance_relationship: InstanceRelationship) -> Optional[Notice]:
     LOG.info(f"Adding relationship between instances: {instance_relationship.instance_id_one} and {instance_relationship.instance_id_two}")
     try:
@@ -569,6 +568,8 @@ async def open_project(project_id: str):
     LAST_INSERTED_INSTANCE_ID = None
     global LAST_UPDATED_INSTANCE_ID
     LAST_UPDATED_INSTANCE_ID = None
+    global MODELS
+    MODELS = []
     return CURRENT_OPEN_PROJECT
 
 
