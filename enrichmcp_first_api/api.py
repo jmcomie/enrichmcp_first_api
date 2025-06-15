@@ -5,13 +5,14 @@ import os
 from typing import Literal, Optional
 from altair import Type
 from enrichmcp import EnrichMCP, EnrichModel, Relationship
-from pydantic import Field
+from pydantic import BaseModel, Field
 from functools import cache
 import base64
 from io import BytesIO
 from appdirs import user_data_dir
 from pathlib import Path
 import logging
+from typing import ForwardRef
 import enrichmcp_first_api
 from enrichmcp_first_api.lib.logger import FileLogger
 import importlib
@@ -89,14 +90,24 @@ class ModelField(EnrichModel):
     description: str = Field(description="A description of the field.")
 
 
-def model_string_from_fields(name: str, model_fields: list[ModelField]) -> str:
+class RelationshipField(BaseModel):
+    name: str
+    target: str
+    side_cardinality: SideCardinality
+    description: str
+
+
+# RelationshipCardinality = Literal["one_to_one", "one_to_many", "many_to_one", "many_to_many"]
+
+
+def model_string_from_fields(name: str, model_fields: list[ModelField], relationships: list[RelationshipField] = []) -> str:
     """
     Add a model to the EnrichMCP application.
     This is used to register models that can be used in the current project.
     """
     # iterate over the fields and create a string representation of the model
     model_str: str = f"""\
-from enrichmcp import EnrichMCP, EnrichModel
+from enrichmcp import EnrichMCP, EnrichModel, Relationship
 from pydantic import Field
 from enrichmcp_first_api.model import WorldBuilderEntity
 
@@ -105,9 +116,11 @@ class {name}(WorldBuilderEntity):
 """
     for field in model_fields:
         model_str += f"    {field.name}: {field.type} = Field(description=\"{field.description}\")\n"
+    for relation_field in relationships:
+        type_str = f'list["{relation_field.target}"]' if relation_field.cardinality in ["many_to_many", "one_to_many"] else f'"{relation_field.target}"'
+        model_str += f"    {relation_field.name}: {type_str} = Field(description=\"{relation_field.description}\")\n"
     model_str += "\n"
     return model_str
-
 
 
 def import_module_from_path(module_name, module_path):
@@ -306,9 +319,34 @@ def list_world_builder_entity_class_names() -> list[str]:
         class_names.append(enrichmcp_class.__name__)
     return class_names
 
+@app.entity
+class Author(EnrichModel):
+    """Represents a book author."""
+
+    id: int = Field(description="Author ID")
+    name: str = Field(description="Author's full name")
+    bio: str = Field(description="Short biography")
+
+    # Relationship to books
+    books: list["Book"] = Relationship(description="Books written by this author")
+
+@app.entity
+class Book(EnrichModel):
+    """Represents a book in the catalog."""
+
+    id: int = Field(description="Book ID")
+    title: str = Field(description="Book title")
+    isbnwhathwat: str = Field(description="ISBN-13")
+    published: date = Field(description="Publication date")
+    author_id: int = Field(description="Author ID")
+    # Relationship to author
+    author: Author = Relationship(description="Author of this book")
+
+
+
 
 RelationshipCardinality = Literal["one_to_one", "one_to_many", "many_to_one", "many_to_many"]
-
+SideCardinality = Literal["one", "many"]
 
 
 @app.entity(description="A notice for the LLM to consider a directive, such as when some follow up action should be taken or considered.")
@@ -320,6 +358,9 @@ class Notice(EnrichModel):
 def get_last_inserted_instance_id() -> Optional[int]:
     return LAST_INSERTED_INSTANCE_ID
 
+@app.resource(description="Get the last updated instance ID. This is used to retrieve the ID of the last instance that was updated.")
+def get_last_updated_instance_id() -> Optional[int]:
+    return LAST_UPDATED_INSTANCE_ID
 
 # def add_model_type should take create_relationship: Optional[Relationship] 
 # instances will love in one file so that their
@@ -342,21 +383,136 @@ class InstanceRelationship(EnrichModel):
     instance_id_two: int = Field(description="The ID of the second instance in the relationship.")
 
 
-@app.resource(description="Add a relationship to the entity schema. This is used to define the relationship schema between two world builder entities.")
-def add_relationship_to_entity_schema(relationship: EntitySchemaRelationship):
+def get_model_fields_and_relationships_from_entity(entity: Type[WorldBuilderEntity]) -> tuple[list[ModelField], list[RelationshipField]]:
+    """
+    Get the model fields and relationships from a world builder entity class.
+    This is used to extract the fields and relationships defined in the entity class.
+    """
+    model_fields: list[ModelField] = []
+    relationships: list[RelationshipField] = []
+    
+    for field_name, field in entity.model_fields.items():
+        if isinstance(field.annotation, ForwardRef):
+            # Handle relationship fields
+            forward_ref_str: str = field.annotation.__forward_arg__.replace("'", '"')
+            side_cardinality: SideCardinality = "many" if forward_ref_str.startswith("list[") else "one"
+            relationships.append(RelationshipField(
+                name=field_name,
+                target=field_name,
+                side_cardinality=side_cardinality,
+                description=field.description
+            ))
+        else:
+            # Handle regular fields
+            model_fields.append(ModelField(
+                name=field_name,
+                type=field.annotation.__name__,
+                description=field.description
+            ))
+    
+    return model_fields, relationships
+
+
+def _add_relationship_to_entity_schema(relationship: EntitySchemaRelationship) -> Optional[Notice]:
+    """
+    Add a relationship to the entity schema. This is used to define the relationship schema between two world builder entities.
+    """
     LOG.info(f"Adding relationship to entity schema: {relationship.world_builder_entity_name_one} and {relationship.world_builder_entity_name_two} with cardinality {relationship.cardinality}")
+    entity_type_one: Type[WorldBuilderEntity] = get_world_builder_entity_class_by_name(relationship.world_builder_entity_name_one)
+    entity_type_two: Type[WorldBuilderEntity] = get_world_builder_entity_class_by_name(relationship.world_builder_entity_name_two)
+    if entity_type_one is None or entity_type_two is None:
+        return Notice(message=f"Error: One or both of the specified world builder entities do not exist: {relationship.world_builder_entity_name_one}, {relationship.world_builder_entity_name_two}. Please ensure they are created before adding a relationship.")
+    for entity_type in [entity_type_one, entity_type_two]:
+        model_fields, relationships = get_model_fields_and_relationships_from_entity(entity_type)
+        # Check if the relationship already exists
+        # Add the relationship to the entity schema
+        target =  relationship.world_builder_entity_name_two if entity_type.__name__ == relationship.world_builder_entity_name_one else relationship.world_builder_entity_name_one
+        if any(rel.name == relationship.world_builder_entity_name_two and rel.target == target for rel in relationships):
+            LOG.warning(f"Relationship {relationship.world_builder_entity_name_one} to {relationship.world_builder_entity_name_two} already exists in {entity_type.__name__}. Skipping.")
+            continue
+        side_cardinality: str
+        if relationship.world_builder_entity_name_one == entity_type.__name__:
+            # Entity is on the "one" side of the relationship definition
+            if relationship.cardinality in ["one_to_many", "one_to_one"]:
+                side_cardinality = "one"
+            else:  # many_to_one, many_to_many
+                side_cardinality = "many"
+        elif relationship.world_builder_entity_name_two == entity_type.__name__:
+            # Entity is on the "two" side of the relationship definition
+            if relationship.cardinality in ["many_to_one", "one_to_one"]:
+                side_cardinality = "one"
+            else:  # one_to_many, many_to_many
+                side_cardinality = "many"
+        else:
+            # Entity is not part of this relationship - this shouldn't happen
+            # but handle gracefully
+            return  Notice(message=f"Error: Entity {entity_type.__name__} is not part of the relationship {relationship.world_builder_entity_name_one} to {relationship.world_builder_entity_name_two}. Please ensure the relationship is defined correctly.")
+        relationships.append(RelationshipField(
+            name=relationship.world_builder_entity_name_two,
+            target=relationship.world_builder_entity_name_one,
+            side_cardinality=side_cardinality,
+            description=f"A relationship to {side_cardinality} {target} instance(s)."
+        ))
+        for model in MODELS:
+            if model.__name__ == entity_type.__name__:
+                # Update the model in the MODELS list
+                MODELS.remove(model)
+                break
+        # Write the updated model to file
+        write_model_to_file_and_import(entity_type.__name__, model_fields + relationships)
+
+
+@app.resource(description="Add a relationship to the entity schema. This is used to define the relationship schema between two world builder entities.")
+def add_relationship_to_entity_schema(relationship: EntitySchemaRelationship) -> Optional[Notice]:
+    LOG.info(f"Adding relationship to entity schema: {relationship.world_builder_entity_name_one} and {relationship.world_builder_entity_name_two} with cardinality {relationship.cardinality}")
+    entity_type_one: Type[WorldBuilderEntity] = get_world_builder_entity_class_by_name(relationship.world_builder_entity_name_one)
+    entity_type_two: Type[WorldBuilderEntity] = get_world_builder_entity_class_by_name(relationship.world_builder_entity_name_two)
+    if entity_type_one is None or entity_type_two is None:
+        return Notice(message=f"Error: One or both of the specified world builder entities do not exist: {relationship.world_builder_entity_name_one}, {relationship.world_builder_entity_name_two}. Please ensure they are created before adding a relationship.")
+    try:
+        _add_relationship_to_entity_schema(relationship)
+    except Exception as e:
+        LOG.exception(f"Error adding relationship to entity schema: {e}")
+        return Notice(message=f"Error adding relationship to entity schema: {e}. Please ensure the relationship is defined correctly.")
+    return Notice(message=f"Relationship {relationship.world_builder_entity_name_one} to {relationship.world_builder_entity_name_two} with cardinality {relationship.cardinality} added successfully.")
 
 
 @app.resource(description="Add a relationship between two world builder entities per their cardinality. e.g. if the relationship is one-to-many, then the first instance will have a list of second instances.")
-def add_relationship_between_instances(InstanceRelationship):
-    LOG.info(f"Adding relationship between instances: {InstanceRelationship.instance_id_one} and {InstanceRelationship.instance_id_two}")
+def add_relationship_between_instances(instance_relationship: InstanceRelationship) -> Optional[Notice]:
+    LOG.info(f"Adding relationship between instances: {instance_relationship.instance_id_one} and {instance_relationship.instance_id_two}")
+    try:
+        instance_one: WorldBuilderEntity = get_instance_by_id(instance_relationship.instance_id_one)
+        instance_two: WorldBuilderEntity = get_instance_by_id(instance_relationship.instance_id_two)
+        if instance_one is None or instance_two is None:
+            LOG.error(f"One or both instances do not exist: {instance_relationship.instance_id_one}, {instance_relationship.instance_id_two}.")
+            return Notice(message=f"Error: One or both instances do not exist: {instance_relationship.instance_id_one}, {instance_relationship.instance_id_two}. Please ensure they are created before adding a relationship.")
+        
+        if isinstance(instance_one.__class__.model_fields[instance_two.__class__.__name__], list):
+            # If the field is a list, append the second instance to the first instance's field
+            instance_one.__class__.model_fields[instance_two.__class__.__name__].append(instance_relationship.instance_id_two)
+        else:
+            instance_one.__class__.model_fields[instance_two.__class__.__name__] = instance_relationship.instance_id_two
+        
+        if isinstance(instance_two.__class__.model_fields[instance_one.__class__.__name__], list):
+            # If the field is a list, append the first instance to the second instance's field
+            instance_two.__class__.model_fields[instance_one.__class__.__name__].append(instance_relationship.instance_id_one)
+        else:
+            instance_two.__class__.model_fields[instance_one.__class__.__name__] = instance_relationship.instance_id_one
+    except Exception as e:
+        LOG.exception(f"Error adding relationship between instances: {e}")
+        return Notice(message=f"Error adding relationship between instances: {e}. Please ensure the instances are created and the relationship is defined correctly.")
 
 
 def has_empty_relationship(instance: WorldBuilderEntity):
     # Returns if an instance has a relationship field
     # with no value.
-    pass
-
+    for field_name, field in instance.__class__.model_fields.items():
+        if isinstance(field.annotation, ForwardRef):
+            if not getattr(instance, field_name):
+                LOG.info(f"Instance {instance.__class__.__name__} has empty relationship field: {field_name}")
+                return True
+    LOG.info(f"Instance {instance.__class__.__name__} has no empty relationship fields.")
+    return False
 
 
 @app.resource(description="Create a new instance of a world builder entity. This is an dict containing data of one of the subclasses of WorldBuilderEntity, created with a call to create_world_builder_entity.")
@@ -383,8 +539,8 @@ def create_world_builder_entity_instance(world_builder_entity_name: str, data_di
     except Exception as e:
         LOG.exception(f"Error writing instance data: {e}")
         return Notice(message=f"Error writing instance data: {e}. Please try again.")
-    #if has_empty_relationship(instance):
-    #    return Notice(message="Success! Instance created. Now review prompt and add relationship data between two instances if applicable.")
+    if has_empty_relationship(instance):
+        return Notice(message="Success! Instance created. Now review prompt and add relationship data between two instances if applicable.")
 
 
 @app.resource
