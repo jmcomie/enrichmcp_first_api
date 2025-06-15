@@ -25,6 +25,7 @@ app = EnrichMCP(title="WorldBuilder", description="A simple API for world buildi
 MODELS_DIRECTORY: Path = Path(f"{enrichmcp_first_api.__path__[0]}/models")
 PROJECT_FILE_NAME: str = "project.json"
 
+FORWARD_REF_SEMAPHORE: str = "FORWARD_REF:"
 
 MODELS: list[Type[EnrichModel]] = []
 INSTANCES_FILENAME: str = "instances.json"
@@ -117,8 +118,8 @@ class {name}(WorldBuilderEntity):
     for field in model_fields:
         model_str += f"    {field.name}: {field.type} = Field(description=\"{field.description}\")\n"
     for relation_field in relationships:
-        type_str = f'list["{relation_field.target}"]' if relation_field.side_cardinality == "many" else f'"{relation_field.target}"'
-        model_str += f"    {relation_field.name}: {type_str} = Field(description=\"{relation_field.description}\")\n"
+        type_str = 'list[int]' if relation_field.side_cardinality == "many" else 'int'
+        model_str += f"    {relation_field.name}: {type_str} = Field(default=None, description=\"{relation_field.description}\")\n"
     model_str += "\n"
     return model_str
 
@@ -385,10 +386,9 @@ def get_model_fields_and_relationships_from_entity(entity: Type[WorldBuilderEnti
     relationships: list[RelationshipField] = []
     
     for field_name, field in entity.model_fields.items():
-        if isinstance(field.annotation, ForwardRef):
+        if FORWARD_REF_SEMAPHORE in field.description:
             # Handle relationship fields
-            forward_ref_str: str = field.annotation.__forward_arg__.replace("'", '"')
-            side_cardinality: SideCardinality = "many" if forward_ref_str.startswith("list[") else "one"
+            side_cardinality: SideCardinality = "many" if field.type == list else "one"
             relationships.append(RelationshipField(
                 name=entity.__name__,
                 target=field_name,
@@ -444,7 +444,7 @@ def _add_relationship_to_entity_schema(relationship: EntitySchemaRelationship) -
             name=relationship.world_builder_entity_name_two if entity_type.__name__ == relationship.world_builder_entity_name_one else relationship.world_builder_entity_name_one,
             target=target,
             side_cardinality=side_cardinality,
-            description=f"A relationship to {side_cardinality} {target} instance(s)."
+            description=f"A relationship to {side_cardinality} {target} instance(s). {FORWARD_REF_SEMAPHORE}:{target}"
         ))
         for model in MODELS:
             if model.__name__ == entity_type.__name__:
@@ -479,7 +479,7 @@ def add_relationship_between_instances(instance_relationship: InstanceRelationsh
         if instance_one is None or instance_two is None:
             LOG.error(f"One or both instances do not exist: {instance_relationship.instance_id_one}, {instance_relationship.instance_id_two}.")
             return Notice(message=f"Error: One or both instances do not exist: {instance_relationship.instance_id_one}, {instance_relationship.instance_id_two}. Please ensure they are created before adding a relationship.")
-        
+        LOG.info(f"model fields: {instance_one.__class__.model_fields}")
         if isinstance(instance_one.__class__.model_fields[instance_two.__class__.__name__], list):
             # If the field is a list, append the second instance to the first instance's field
             instance_one.__class__.model_fields[instance_two.__class__.__name__].append(instance_relationship.instance_id_two)
@@ -500,8 +500,8 @@ def has_empty_relationship(instance: WorldBuilderEntity):
     # Returns if an instance has a relationship field
     # with no value.
     for field_name, field in instance.__class__.model_fields.items():
-        if isinstance(field.annotation, ForwardRef):
-            if not getattr(instance, field_name):
+        if FORWARD_REF_SEMAPHORE in field.description:
+            if not getattr(instance, field_name) and getattr(instance, field_name) != 0:
                 LOG.info(f"Instance {instance.__class__.__name__} has empty relationship field: {field_name}")
                 return True
     LOG.info(f"Instance {instance.__class__.__name__} has no empty relationship fields.")
