@@ -17,6 +17,7 @@ pygame = "^2.6.1"
 streamlit = "^1.45.1"
 prompt-toolkit = "^3.0.51"
 anthropic = "^0.54.0"
+appdirs = "^1.4.4"
 
 
 [build-system]
