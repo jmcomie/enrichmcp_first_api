@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<map version="1.10" tiledversion="1.10.2" orientation="orthogonal" renderorder="right-down" width="30" height="20" tilewidth="16" tileheight="16" infinite="0" nextlayerid="7" nextobjectid="4">
+ <tileset firstgid="1" source="./tilesets/TexturedGrass.tsx"/>
+ <tileset firstgid="7" source="./tilesets/Shore.tsx"/>
+ <layer id="3" name="AllTiles-1" width="30" height="20">
+  <properties>
+   <property name="description" value="It's required that we have a map layer with all tiles we want to load in pytmx. (per testing; note docs say otherwise, with `load_all` param)"/>
+  </properties>
+  <data encoding="base64" compression="zlib">
+   eJztzrcNADAQw0A5p/33NZewv9EBrKUkKVPRX5Ua9c+7UQZNWrTpxN4xMzOzhy4r+gBD
+  </data>
+ </layer>
+ <layer id="5" name="Terrain" width="30" height="20">
+  <data encoding="base64" compression="zlib">
+   eJztwTEBAAAAwqD1T20JT6AAAHgaCWAAAQ==
+  </data>
+ </layer>
+ <layer id="6" name="Structures" width="30" height="20">
+  <data encoding="base64" compression="zlib">
+   eJztwTEBAAAAwqD1T20JT6AAAHgaCWAAAQ==
+  </data>
+ </layer>
+</map>
