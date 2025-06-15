@@ -124,10 +124,16 @@ class {name}(WorldBuilderEntity):
     return model_str
 
 
-def import_module_from_path(module_name, module_path):
+def import_module_from_path(module_name, module_path, force_reload=False):
     """Imports a module from a given file path and applies entity decorators to all classes."""
     if not os.path.exists(module_path):
         raise FileNotFoundError(f"Module file not found: {module_path}")
+    
+    # Simple force reload - just remove from sys.modules
+    if force_reload and module_name in sys.modules:
+        del sys.modules[module_name]
+        # Optionally clear MODELS list if you want to start fresh
+        MODELS.clear()  # Add this line if you want to clear all models
     
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     if spec is None or spec.loader is None:
@@ -151,8 +157,7 @@ def import_module_from_path(module_name, module_path):
             MODELS.append(decorated_class)
     return module
 
-
-def write_model_to_file_and_import(model_name: str, model_fields: list[ModelField], relationships: list[RelationshipField] = []) -> None:
+def write_model_to_file_and_import(model_name: str, model_fields: list[ModelField], relationships: list[RelationshipField] = [], force_reload= False) -> None:
     """
     Write the model to a file in the current project directory.
     This is used to persist the model definition.
@@ -170,7 +175,7 @@ def write_model_to_file_and_import(model_name: str, model_fields: list[ModelFiel
     try:
         importlib.invalidate_caches()  # Clear the import cache
         # import model_path
-        import_module_from_path(model_name, model_path)
+        import_module_from_path(model_name, model_path, force_reload=force_reload)
     except Exception as e:
         LOG.error(f"Error importing model {model_name} from {model_path}: {e}")
         raise ImportError(f"Error importing model {model_name} from {model_path}: {e}")
@@ -199,6 +204,16 @@ async def create_world_builder_entity(name: str, fields: list[ModelField]) -> Op
 
 @app.resource(description="List all available models in the EnrichMCP system. This is used to get a list of all models that can be used in the current project.")
 async def list_world_builder_entities() -> list[Type[EnrichModel]]:
+    if not MODELS:
+        project_path: Path = Path(get_path_to_project(CURRENT_OPEN_PROJECT.id))
+        model_path: Path = project_path / "models"
+        for model_file in model_path.glob("*.py"):
+            if model_file.name.startswith("__") or model_file.name == "base.py":
+                continue
+            try:
+                import_module_from_path(model_file.stem, model_file)
+            except Exception as e:
+                LOG.error(f"Error loading model {model_file}: {e}")
     return MODELS
 
 
@@ -452,7 +467,7 @@ def _add_relationship_to_entity_schema(relationship: EntitySchemaRelationship) -
                 MODELS.remove(model)
                 break
         # Write the updated model to file
-        write_model_to_file_and_import(entity_type.__name__, model_fields, relationships)
+        write_model_to_file_and_import(entity_type.__name__, model_fields, relationships, force_reload=True)
 
 
 @app.resource(description="Add a relationship to the entity schema. This is used to define the relationship schema between two world builder entities.")
