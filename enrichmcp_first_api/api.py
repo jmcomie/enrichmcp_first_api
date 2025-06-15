@@ -117,7 +117,7 @@ class {name}(WorldBuilderEntity):
     for field in model_fields:
         model_str += f"    {field.name}: {field.type} = Field(description=\"{field.description}\")\n"
     for relation_field in relationships:
-        type_str = f'list["{relation_field.target}"]' if relation_field.cardinality in ["many_to_many", "one_to_many"] else f'"{relation_field.target}"'
+        type_str = f'list["{relation_field.target}"]' if relation_field.side_cardinality == "many" else f'"{relation_field.target}"'
         model_str += f"    {relation_field.name}: {type_str} = Field(description=\"{relation_field.description}\")\n"
     model_str += "\n"
     return model_str
@@ -151,7 +151,7 @@ def import_module_from_path(module_name, module_path):
     return module
 
 
-def write_model_to_file_and_import(model_name: str, model_fields: list[ModelField]) -> None:
+def write_model_to_file_and_import(model_name: str, model_fields: list[ModelField], relationships: list[RelationshipField] = []) -> None:
     """
     Write the model to a file in the current project directory.
     This is used to persist the model definition.
@@ -162,7 +162,7 @@ def write_model_to_file_and_import(model_name: str, model_fields: list[ModelFiel
         model_path.parent.mkdir(parents=True, exist_ok=True)
     if model_path.exists():
         LOG.warning(f"Model file {model_path} already exists. It will be overwritten.")
-    model_str: str = model_string_from_fields(model_name, model_fields)
+    model_str: str = model_string_from_fields(model_name, model_fields, relationships)
     with open(model_path, 'w', encoding='utf-8') as f:
         f.write(model_str)
     LOG.info(f"Model {model_name} written to {model_path}")
@@ -215,6 +215,10 @@ async def create_new_project(project: Project) -> Project:
     LOG.info(f"Project {project.name} created with ID {project.id}.")
     global CURRENT_OPEN_PROJECT
     CURRENT_OPEN_PROJECT = project
+    global LAST_INSERTED_INSTANCE_ID
+    LAST_INSERTED_INSTANCE_ID = None
+    global LAST_UPDATED_INSTANCE_ID
+    LAST_UPDATED_INSTANCE_ID = None
     return project
 
 
@@ -277,6 +281,7 @@ def update_world_builder_entity_instance(id: int, instance: WorldBuilderEntity):
     instance_dicts: list[dict] =  json.loads(get_instances_filepath().read_text('utf-8'))
     try:
         instance_dicts[id] = instance.model_dump()
+        instance_dicts[id][CLASSNAME_FIELD_NAME] = instance.__class__.__name__
         global LAST_UPDATED_INSTANCE_ID
         LAST_UPDATED_INSTANCE_ID = id
         get_instances_filepath().write_text(json.dumps(instance_dicts), 'utf-8')
@@ -287,10 +292,22 @@ def update_world_builder_entity_instance(id: int, instance: WorldBuilderEntity):
 @app.resource(description="Fetch the instance of a world builder entity by its ID.")
 def get_instance_by_id(id: int) -> Optional[WorldBuilderEntity]:
     instance_dicts: list[dict] =  json.loads(get_instances_filepath().read_text('utf-8'))
+    LOG.info(f"Found {len(instance_dicts)} instances in the file.")
     try:
-        return instance_dicts[id]
-    except KeyError:
+        classname: str = instance_dicts[id].pop(CLASSNAME_FIELD_NAME)
+        cls: Type[WorldBuilderEntity] = get_world_builder_entity_class_by_name(classname)
+        if cls is None:
+            LOG.warning(f"Could not find class {classname} for instance with ID {id}.")
+            return None
+        return cls.model_validate(instance_dicts[id])
+    except KeyError as e:
+        LOG.exception(f"Error retrieving instance with ID {id}: {e}")
+        LOG.warning("Returning None as the instance could not be found.")
         return None
+    except Exception as e:
+        LOG.exception(f"Unexpected error retrieving instance with ID {id}: {e}")
+        return None
+
 
 @app.resource(description="Get a list of all instances of a world builder entity type.")
 def list_entity_instances(world_builder_entity_name: str) -> list[InstanceWithId]:
@@ -318,30 +335,6 @@ def list_world_builder_entity_class_names() -> list[str]:
     for enrichmcp_class in MODELS:
         class_names.append(enrichmcp_class.__name__)
     return class_names
-
-@app.entity
-class Author(EnrichModel):
-    """Represents a book author."""
-
-    id: int = Field(description="Author ID")
-    name: str = Field(description="Author's full name")
-    bio: str = Field(description="Short biography")
-
-    # Relationship to books
-    books: list["Book"] = Relationship(description="Books written by this author")
-
-@app.entity
-class Book(EnrichModel):
-    """Represents a book in the catalog."""
-
-    id: int = Field(description="Book ID")
-    title: str = Field(description="Book title")
-    isbnwhathwat: str = Field(description="ISBN-13")
-    published: date = Field(description="Publication date")
-    author_id: int = Field(description="Author ID")
-    # Relationship to author
-    author: Author = Relationship(description="Author of this book")
-
 
 
 
@@ -397,7 +390,7 @@ def get_model_fields_and_relationships_from_entity(entity: Type[WorldBuilderEnti
             forward_ref_str: str = field.annotation.__forward_arg__.replace("'", '"')
             side_cardinality: SideCardinality = "many" if forward_ref_str.startswith("list[") else "one"
             relationships.append(RelationshipField(
-                name=field_name,
+                name=entity.__name__,
                 target=field_name,
                 side_cardinality=side_cardinality,
                 description=field.description
@@ -448,8 +441,8 @@ def _add_relationship_to_entity_schema(relationship: EntitySchemaRelationship) -
             # but handle gracefully
             return  Notice(message=f"Error: Entity {entity_type.__name__} is not part of the relationship {relationship.world_builder_entity_name_one} to {relationship.world_builder_entity_name_two}. Please ensure the relationship is defined correctly.")
         relationships.append(RelationshipField(
-            name=relationship.world_builder_entity_name_two,
-            target=relationship.world_builder_entity_name_one,
+            name=relationship.world_builder_entity_name_two if entity_type.__name__ == relationship.world_builder_entity_name_one else relationship.world_builder_entity_name_one,
+            target=target,
             side_cardinality=side_cardinality,
             description=f"A relationship to {side_cardinality} {target} instance(s)."
         ))
@@ -459,7 +452,7 @@ def _add_relationship_to_entity_schema(relationship: EntitySchemaRelationship) -
                 MODELS.remove(model)
                 break
         # Write the updated model to file
-        write_model_to_file_and_import(entity_type.__name__, model_fields + relationships)
+        write_model_to_file_and_import(entity_type.__name__, model_fields, relationships)
 
 
 @app.resource(description="Add a relationship to the entity schema. This is used to define the relationship schema between two world builder entities.")
@@ -532,7 +525,9 @@ def create_world_builder_entity_instance(world_builder_entity_name: str, data_di
     try:
         instance_dicts: list[dict] =  json.loads(get_instances_filepath().read_text('utf-8'))
         #return Notice(message="Success! Instance created.")
-        instance_dicts.append(instance.model_dump())
+        model_dict: dict = instance.model_dump()
+        model_dict[CLASSNAME_FIELD_NAME] = instance.__class__.__name__
+        instance_dicts.append(model_dict)
         global LAST_INSERTED_INSTANCE_ID
         LAST_INSERTED_INSTANCE_ID = len(instance_dicts) - 1
         get_instances_filepath().write_text(json.dumps(instance_dicts), 'utf-8')
@@ -557,6 +552,8 @@ async def open_project(project_id: str):
     CURRENT_OPEN_PROJECT = Project.model_validate_json(data)
     global LAST_INSERTED_INSTANCE_ID
     LAST_INSERTED_INSTANCE_ID = None
+    global LAST_UPDATED_INSTANCE_ID
+    LAST_UPDATED_INSTANCE_ID = None
     return CURRENT_OPEN_PROJECT
 
 
