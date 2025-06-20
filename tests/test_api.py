@@ -157,15 +157,11 @@ async def test_create_entity(mock_user_data_dir):
     project = Project(id="test_project", name="Test Project", theme="fantasy")
     await create_new_project(project)
     
-    # Create entity fields
-    fields = [
-        ModelField(name="name", type="str", description="The character's name"),
-        ModelField(name="level", type="int", description="The character's level"),
-        ModelField(name="health", type="float", description="The character's health points")
-    ]
+    # Generate random entity
+    entity_name, fields = generate_random_entity()
     
     # Create the entity
-    result = await create_world_builder_entity("Character", fields)
+    result = await create_world_builder_entity(entity_name, fields)
     
     # Verify no error was returned
     assert result is None
@@ -174,7 +170,7 @@ async def test_create_entity(mock_user_data_dir):
     entities = await list_world_builder_entities()
     assert len(entities) == 1
     created_entity = entities[0]
-    assert created_entity.__name__ == "Character"
+    assert created_entity.__name__ == entity_name
     assert issubclass(created_entity, BaseModel), f"Created entity {created_entity.__name__} should be a subclass of BaseModel"
     assert issubclass(created_entity, WorldBuilderEntity), f"Created entity {created_entity.__name__} should be a subclass of WorldBuilderEntity"
 
@@ -200,21 +196,16 @@ async def test_list_entities_with_entity(mock_user_data_dir):
     project = Project(id="test_project", name="Test Project", theme="fantasy")
     await create_new_project(project)
     
-    # Create entity fields
-    fields = [
-        ModelField(name="name", type="str", description="The character's name"),
-        ModelField(name="level", type="int", description="The character's level")
-    ]
-    
-    # Create the entity
-    await create_world_builder_entity("Character", fields)
+    # Generate and create random entity
+    entity_name, fields = generate_random_entity()
+    await create_world_builder_entity(entity_name, fields)
     
     # List entities
     entities = await list_world_builder_entities()
     
     # Verify we get one entity back
     assert len(entities) == 1
-    assert entities[0].__name__ == "Character"
+    assert entities[0].__name__ == entity_name
     
     # Verify it's properly typed as a BaseModel and WorldBuilderEntity subclass
     assert issubclass(entities[0], BaseModel), f"Entity {entities[0].__name__} should be a subclass of BaseModel"
@@ -228,25 +219,15 @@ async def test_create_and_retrieve_instance(mock_user_data_dir):
     project = Project(id="test_project", name="Test Project", theme="fantasy")
     await create_new_project(project)
     
-    # Create an entity first
-    fields = [
-        ModelField(name="name", type="str", description="The character's name"),
-        ModelField(name="level", type="int", description="The character's level"),
-        ModelField(name="health", type="float", description="The character's health points"),
-        ModelField(name="is_active", type="bool", description="Whether the character is active")
-    ]
-    result = await create_world_builder_entity("Character", fields)
+    # Generate random entity and create it
+    entity_name, fields = generate_random_entity()
+    result = await create_world_builder_entity(entity_name, fields)
     assert result is None
     
-    # Create an instance of the entity
-    instance_data = {
-        "name": "Aragorn",
-        "level": 42,
-        "health": 100.5,
-        "is_active": True
-    }
+    # Generate random instance data
+    instance_data = generate_random_instance(entity_name, fields)
     
-    result = create_world_builder_entity_instance("Character", instance_data)
+    result = create_world_builder_entity_instance(entity_name, instance_data)
     # Should return None (success) or a Notice
     assert result is None or (hasattr(result, 'message') and 'Success' in result.message)
     
@@ -261,19 +242,23 @@ async def test_create_and_retrieve_instance(mock_user_data_dir):
     
     # Verify the instance is of the correct type
     assert isinstance(retrieved_instance, WorldBuilderEntity), "Retrieved instance should be a WorldBuilderEntity"
-    assert retrieved_instance.__class__.__name__ == "Character", "Retrieved instance should be a Character"
+    assert retrieved_instance.__class__.__name__ == entity_name, f"Retrieved instance should be a {entity_name}"
     
-    # Verify all field values are correct
-    assert retrieved_instance.name == "Aragorn", f"Expected name 'Aragorn', got {retrieved_instance.name}"
-    assert retrieved_instance.level == 42, f"Expected level 42, got {retrieved_instance.level}"
-    assert retrieved_instance.health == 100.5, f"Expected health 100.5, got {retrieved_instance.health}"
-    assert retrieved_instance.is_active == True, f"Expected is_active True, got {retrieved_instance.is_active}"
-    
-    # Verify field types are correct
-    assert isinstance(retrieved_instance.name, str), "Name should be a string"
-    assert isinstance(retrieved_instance.level, int), "Level should be an integer"
-    assert isinstance(retrieved_instance.health, float), "Health should be a float"
-    assert isinstance(retrieved_instance.is_active, bool), "is_active should be a boolean"
+    # Verify all field values and types are correct
+    for field in fields:
+        field_value = getattr(retrieved_instance, field.name)
+        expected_value = instance_data[field.name]
+        assert field_value == expected_value, f"Field {field.name}: expected {expected_value}, got {field_value}"
+        
+        # Verify field types
+        if field.type == "str":
+            assert isinstance(field_value, str), f"Field {field.name} should be string"
+        elif field.type == "int":
+            assert isinstance(field_value, int), f"Field {field.name} should be integer"
+        elif field.type == "float":
+            assert isinstance(field_value, float), f"Field {field.name} should be float"
+        elif field.type == "bool":
+            assert isinstance(field_value, bool), f"Field {field.name} should be boolean"
     
     # Test retrieving non-existent instance
     non_existent_instance = get_instance_by_id(999)
@@ -282,88 +267,60 @@ async def test_create_and_retrieve_instance(mock_user_data_dir):
 
 def test_generate_random_entity():
     """Test the random entity generator utility function."""
-    # Generate first entity
+    # Generate two entities
     entity_name1, fields1 = generate_random_entity()
+    entity_name2, fields2 = generate_random_entity()
     
-    # Basic validation of first entity
-    assert isinstance(entity_name1, str), "Entity name should be a string"
-    assert len(entity_name1) >= 5, f"Entity name should be at least 5 characters, got {len(entity_name1)}"
-    assert entity_name1[0].isupper(), "Entity name should start with uppercase"
-    assert entity_name1[1:].islower(), "Entity name should have lowercase after first character"
-    
-    assert isinstance(fields1, list), "Fields should be a list"
-    assert 2 <= len(fields1) <= 6, f"Should have 2-6 fields, got {len(fields1)}"
+    # Basic validation
+    assert isinstance(entity_name1, str) and len(entity_name1) >= 5
+    assert entity_name1[0].isupper() and entity_name1[1:].islower()
+    assert isinstance(fields1, list) and 2 <= len(fields1) <= 6
     
     # Validate field structure
     for field in fields1:
-        assert isinstance(field, ModelField), "Each field should be a ModelField"
-        assert field.type in ["str", "int", "float", "bool"], f"Field type {field.type} should be supported"
-        assert len(field.name) >= 3, f"Field name should be at least 3 characters, got {field.name}"
-        assert field.name.islower(), f"Field name should be lowercase, got {field.name}"
-        assert field.description, "Field should have a description"
+        assert isinstance(field, ModelField)
+        assert field.type in ["str", "int", "float", "bool"]
+        assert len(field.name) >= 3 and field.name.islower()
+        assert field.description
     
-    # Generate second entity
-    entity_name2, fields2 = generate_random_entity()
+    # Entities should be different
+    assert entity_name1 != entity_name2
+    assert [f.name for f in fields1] != [f.name for f in fields2]
     
-    # Entities should be different (very high probability)
-    assert entity_name1 != entity_name2, "Two generated entities should have different names"
-    
-    # Field names should be different (very high probability)
-    field_names1 = [f.name for f in fields1]
-    field_names2 = [f.name for f in fields2]
-    assert field_names1 != field_names2, "Two generated entities should have different field names"
-    
-    # Verify no duplicate field names within single entity
-    assert len(set(field_names1)) == len(field_names1), "Entity should not have duplicate field names"
-    assert len(set(field_names2)) == len(field_names2), "Entity should not have duplicate field names"
+    # No duplicate field names within entities
+    assert len(set(f.name for f in fields1)) == len(fields1)
+    assert len(set(f.name for f in fields2)) == len(fields2)
 
 
 def test_generate_random_instance():
     """Test the random instance generator utility function."""
-    # Create a test entity with known fields
-    test_fields = [
-        ModelField(name="name", type="str", description="A string field"),
-        ModelField(name="age", type="int", description="An integer field"),
-        ModelField(name="score", type="float", description="A float field"),
-        ModelField(name="active", type="bool", description="A boolean field")
-    ]
+    # Use generator for test fields
+    _, test_fields = generate_random_entity()
     
-    # Generate first instance
+    # Generate and validate instances  
     instance1 = generate_random_instance("TestEntity", test_fields)
-    
-    # Basic validation
-    assert isinstance(instance1, dict), "Instance should be a dictionary"
-    assert len(instance1) == 4, "Instance should have 4 fields"
-    
-    # Validate field presence and types
-    assert "name" in instance1, "Instance should have 'name' field"
-    assert "age" in instance1, "Instance should have 'age' field"
-    assert "score" in instance1, "Instance should have 'score' field"
-    assert "active" in instance1, "Instance should have 'active' field"
-    
-    assert isinstance(instance1["name"], str), "Name should be string"
-    assert isinstance(instance1["age"], int), "Age should be integer"
-    assert isinstance(instance1["score"], float), "Score should be float"
-    assert isinstance(instance1["active"], bool), "Active should be boolean"
-    
-    # Validate value ranges
-    assert len(instance1["name"]) >= 5, "Name should be at least 5 characters"
-    assert -100 <= instance1["age"] <= 1000, "Age should be in valid range"
-    assert -100.0 <= instance1["score"] <= 1000.0, "Score should be in valid range"
-    assert instance1["active"] in [True, False], "Active should be boolean"
-    
-    # Generate second instance
     instance2 = generate_random_instance("TestEntity", test_fields)
     
-    # Instances should be different (very high probability)
-    assert instance1 != instance2, "Two generated instances should be different"
+    # Basic validation
+    assert isinstance(instance1, dict) and len(instance1) == len(test_fields)
+    assert isinstance(instance2, dict) and len(instance2) == len(test_fields)
+    assert instance1 != instance2  # Should be different
     
-    # Test with empty fields
-    empty_instance = generate_random_instance("EmptyEntity", [])
-    assert empty_instance == {}, "Instance with no fields should be empty dict"
+    # Validate field types and values
+    for field in test_fields:
+        assert field.name in instance1
+        value = instance1[field.name]
+        if field.type == "str":
+            assert isinstance(value, str) and len(value) >= 5
+        elif field.type == "int":
+            assert isinstance(value, int) and -100 <= value <= 1000
+        elif field.type == "float":
+            assert isinstance(value, float) and -100.0 <= value <= 1000.0
+        elif field.type == "bool":
+            assert isinstance(value, bool)
     
-    # Test with unknown field type
-    unknown_field = [ModelField(name="unknown", type="unknown_type", description="Unknown type")]
-    unknown_instance = generate_random_instance("UnknownEntity", unknown_field)
-    assert "unknown" in unknown_instance, "Should handle unknown field types"
-    assert unknown_instance["unknown"] == "default_unknown", "Unknown type should get default value"
+    # Test edge cases
+    assert generate_random_instance("Empty", []) == {}
+    unknown_field = [ModelField(name="test", type="unknown", description="Test")]
+    unknown_instance = generate_random_instance("Unknown", unknown_field)
+    assert unknown_instance["test"] == "default_test"
