@@ -442,7 +442,7 @@ def get_model_fields_and_relationships_from_entity(entity: Type[WorldBuilderEnti
     
     for field_name, field in entity.model_fields.items():
         # Check if this is a relationship field using the new metadata
-        json_extra = getattr(field, 'json_schema_extra', {})
+        json_extra = getattr(field, 'json_schema_extra', {}) or {}
         is_relationship = json_extra.get('is_relationship', False)
         
         if is_relationship:
@@ -558,7 +558,7 @@ def has_empty_relationship(instance: WorldBuilderEntity):
     # Returns if an instance has a relationship field
     # with no value.
     for field_name, field in instance.__class__.model_fields.items():
-        json_extra = getattr(field, 'json_schema_extra', {})
+        json_extra = getattr(field, 'json_schema_extra', {}) or {}
         is_relationship = json_extra.get('is_relationship', False)
         if is_relationship:
             if not getattr(instance, field_name) and getattr(instance, field_name) != 0:
