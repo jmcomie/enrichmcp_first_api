@@ -5,7 +5,10 @@ from enrichmcp_first_api.api import (
     create_new_project,
     list_projects,
     open_project,
-    Project
+    create_world_builder_entity,
+    list_world_builder_entities,
+    Project,
+    ModelField
 )
 
 
@@ -71,3 +74,62 @@ async def test_open_project(mock_user_data_dir):
     assert opened_project.id == "test_project"
     assert opened_project.name == "Test Project"
     assert opened_project.theme == "fantasy"
+
+
+@pytest.mark.asyncio
+async def test_create_entity(mock_user_data_dir):
+    """Test creating a new world builder entity."""
+    # Create and open a project first
+    project = Project(id="test_project", name="Test Project", theme="fantasy")
+    await create_new_project(project)
+    
+    # Create entity fields
+    fields = [
+        ModelField(name="name", type="str", description="The character's name"),
+        ModelField(name="level", type="int", description="The character's level"),
+        ModelField(name="health", type="float", description="The character's health points")
+    ]
+    
+    # Create the entity
+    result = await create_world_builder_entity("Character", fields)
+    
+    # Verify no error was returned
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_list_entities_empty(mock_user_data_dir):
+    """Test listing entities when no entities exist."""
+    # Create and open a project first
+    project = Project(id="test_project", name="Test Project", theme="fantasy")
+    await create_new_project(project)
+    
+    # List entities
+    entities = await list_world_builder_entities()
+    
+    # Should be empty
+    assert entities == []
+
+
+@pytest.mark.asyncio
+async def test_list_entities_with_entity(mock_user_data_dir):
+    """Test listing entities after creating one."""
+    # Create and open a project first
+    project = Project(id="test_project", name="Test Project", theme="fantasy")
+    await create_new_project(project)
+    
+    # Create entity fields
+    fields = [
+        ModelField(name="name", type="str", description="The character's name"),
+        ModelField(name="level", type="int", description="The character's level")
+    ]
+    
+    # Create the entity
+    await create_world_builder_entity("Character", fields)
+    
+    # List entities
+    entities = await list_world_builder_entities()
+    
+    # Verify we get one entity back
+    assert len(entities) == 1
+    assert entities[0].__name__ == "Character"

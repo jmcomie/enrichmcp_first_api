@@ -76,3 +76,10 @@ poetry run python -m enrichmcp_first_api.api
 - Most operations return `Optional[ErrorResponse]` or `Optional[Notice]`
 - Comprehensive logging using custom `FileLogger` class
 - Model validation through Pydantic with detailed error messages
+
+## Development Guidelines
+
+**Git Commit Messages:**
+- Do not mention Claude's assistance in commit messages
+- Focus on what was changed and why, not who made the changes
+- Use clear, descriptive language about the technical changes
