@@ -7,7 +7,6 @@ from typing import Literal, Optional
 from altair import Type
 from enrichmcp import EnrichMCP, EnrichModel, Relationship
 from pydantic import BaseModel, Field, create_model
-from functools import cache
 import base64
 from io import BytesIO
 from appdirs import user_data_dir
@@ -305,7 +304,6 @@ def list_projects() -> list[Project]:
 # START PASTE #
 ###############
 
-@cache
 def get_world_builder_entity_class_by_name(classname: str) ->Type[WorldBuilderEntity]:
     for enrichmcp_class in MODELS:
         if enrichmcp_class.__name__ == classname:

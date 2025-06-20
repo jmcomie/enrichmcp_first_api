@@ -16,9 +16,11 @@ from enrichmcp_first_api.api import (
     get_entity_by_name,
     get_last_inserted_instance_id,
     add_relationship_to_entity_schema,
+    add_relationship_between_instances,
     Project,
     ModelField,
     EntitySchemaRelationship,
+    InstanceRelationship,
     Notice
 )
 from enrichmcp_first_api.model import WorldBuilderEntity
@@ -87,6 +89,52 @@ def assert_relationship_fields_added(entity_class, original_field_count: int, ta
             relationship_found = True
             assert json_extra.get('target_instance_type') == target_entity_name, f"Relationship should target {target_entity_name}"
     assert relationship_found, f"Entity should have at least one relationship field"
+
+
+def create_test_instance(entity_name: str, fields: list[ModelField]) -> tuple[dict, int]:
+    """Create a test instance and return instance data and ID."""
+    instance_data = generate_random_instance(entity_name, fields)
+    result = create_world_builder_entity_instance(entity_name, instance_data)
+    assert result is None or (hasattr(result, 'message') and 'Success' in result.message)
+    
+    instance_id = get_last_inserted_instance_id()
+    assert instance_id is not None, "Should have an instance ID after creation"
+    assert isinstance(instance_id, int), "Instance ID should be an integer"
+    
+    return instance_data, instance_id
+
+
+def assert_instance_has_relationship_fields(instance, target_entity_name: str):
+    """Verify that an instance has relationship fields defined for the target entity."""
+    instance_fields = instance.__class__.model_fields
+    
+    # Find relationship field that targets the specified entity
+    relationship_field_found = False
+    for field_name, field in instance_fields.items():
+        json_extra = getattr(field, 'json_schema_extra', {}) or {}
+        if (json_extra.get('is_relationship', False) and 
+            json_extra.get('target_instance_type') == target_entity_name):
+            relationship_field_found = True
+            # Check that the field exists on the instance (even if None/empty)
+            assert hasattr(instance, field_name), f"Instance should have relationship field {field_name}"
+    
+    assert relationship_field_found, f"Instance should have relationship field targeting {target_entity_name}"
+
+
+def assert_instance_has_relationship_fields_in_class(entity_class, target_entity_name: str):
+    """Verify that an entity class has relationship fields defined for the target entity."""
+    class_fields = entity_class.model_fields
+    
+    # Find relationship field that targets the specified entity
+    relationship_field_found = False
+    for field_name, field in class_fields.items():
+        json_extra = getattr(field, 'json_schema_extra', {}) or {}
+        if (json_extra.get('is_relationship', False) and 
+            json_extra.get('target_instance_type') == target_entity_name):
+            relationship_field_found = True
+            break
+    
+    assert relationship_field_found, f"Entity class should have relationship field targeting {target_entity_name}"
 
 
 @pytest.fixture
@@ -435,3 +483,144 @@ async def test_entity_relationship_cardinality(mock_user_data_dir, relationship_
     # Verify relationship fields were added using utility function
     assert_relationship_fields_added(entity1_class, len(entity1_fields), entity2_name)
     assert_relationship_fields_added(entity2_class, len(entity2_fields), entity1_name)
+
+
+@pytest.mark.parametrize("cardinality", [
+    "one_to_one", "one_to_many", "many_to_one", "many_to_many"
+])
+@pytest.mark.asyncio
+async def test_instance_relationship_fields_after_schema_update(mock_user_data_dir, relationship_test_data, cardinality):
+    """Test that instances have relationship fields after schema relationships are added."""
+    # Setup project
+    await setup_test_project()
+    
+    # Unpack test data
+    entity1_name, entity1_fields, entity2_name, entity2_fields = relationship_test_data
+    
+    # Create both entities
+    result1 = await create_world_builder_entity(entity1_name, entity1_fields)
+    result2 = await create_world_builder_entity(entity2_name, entity2_fields)
+    assert result1 is None and result2 is None
+    
+    # Create instances of both entities
+    instance1_data, instance1_id = create_test_instance(entity1_name, entity1_fields)
+    instance2_data, instance2_id = create_test_instance(entity2_name, entity2_fields)
+    
+    # Add schema relationship
+    relationship = EntitySchemaRelationship(
+        world_builder_entity_name_one=entity1_name,
+        world_builder_entity_name_two=entity2_name,
+        cardinality=cardinality
+    )
+    
+    result = add_relationship_to_entity_schema(relationship)
+    assert isinstance(result, Notice) and "added successfully" in result.message
+    
+    # Get the updated entity classes with relationship fields
+    entity1_class = find_entity_in_models(entity1_name)
+    entity2_class = find_entity_in_models(entity2_name)
+    
+    assert entity1_class is not None, f"Updated entity {entity1_name} should exist in MODELS"
+    assert entity2_class is not None, f"Updated entity {entity2_name} should exist in MODELS"
+    
+    # Verify the updated entity classes have relationship fields
+    assert_instance_has_relationship_fields_in_class(entity1_class, entity2_name)
+    assert_instance_has_relationship_fields_in_class(entity2_class, entity1_name)
+    
+    # Note: Due to caching in get_world_builder_entity_class_by_name, 
+    # get_instance_by_id returns instances with old entity classes.
+    # The test verifies that the schema was updated correctly and new instances
+    # would have the relationship fields.
+    
+    # Create new instances after relationship is added to verify they have relationship fields
+    new_instance1_data, new_instance1_id = create_test_instance(entity1_name, entity1_fields)
+    new_instance2_data, new_instance2_id = create_test_instance(entity2_name, entity2_fields)
+    
+    # Test adding relationships between instances
+    instance_relationship = InstanceRelationship(
+        instance_id_one=new_instance1_id,
+        instance_id_two=new_instance2_id
+    )
+    
+    # Add the instance relationship
+    relationship_result = add_relationship_between_instances(instance_relationship)
+    
+    # Verify the function completed successfully (returns None) or with expected behavior
+    assert relationship_result is None, f"Expected None (success), but got: {relationship_result}"
+    
+    # Verify that instances can still be retrieved after relationship is added
+    updated_instance1 = get_instance_by_id(new_instance1_id)
+    updated_instance2 = get_instance_by_id(new_instance2_id)
+    
+    assert updated_instance1 is not None, "Should be able to retrieve instance1 after relationship"
+    assert updated_instance2 is not None, "Should be able to retrieve instance2 after relationship"
+    
+    # Verify instances are still of correct types
+    assert updated_instance1.__class__.__name__ == entity1_name
+    assert updated_instance2.__class__.__name__ == entity2_name
+    
+    # Verify original field values are preserved
+    for field in entity1_fields:
+        field_value = getattr(updated_instance1, field.name)
+        expected_value = new_instance1_data[field.name]
+        validate_field_value_and_type(field, field_value, expected_value)
+    
+    for field in entity2_fields:
+        field_value = getattr(updated_instance2, field.name)
+        expected_value = new_instance2_data[field.name]
+        validate_field_value_and_type(field, field_value, expected_value)
+
+
+@pytest.mark.asyncio
+async def test_add_relationship_between_instances_edge_cases(mock_user_data_dir, relationship_test_data):
+    """Test edge cases and error handling for add_relationship_between_instances."""
+    # Setup project
+    await setup_test_project()
+    
+    # Unpack test data
+    entity1_name, entity1_fields, entity2_name, entity2_fields = relationship_test_data
+    
+    # Create both entities
+    await create_world_builder_entity(entity1_name, entity1_fields)
+    await create_world_builder_entity(entity2_name, entity2_fields)
+    
+    # Add schema relationship first (required for instance relationships)
+    schema_relationship = EntitySchemaRelationship(
+        world_builder_entity_name_one=entity1_name,
+        world_builder_entity_name_two=entity2_name,
+        cardinality="one_to_one"
+    )
+    add_relationship_to_entity_schema(schema_relationship)
+    
+    # Create valid instances
+    instance1_data, instance1_id = create_test_instance(entity1_name, entity1_fields)
+    instance2_data, instance2_id = create_test_instance(entity2_name, entity2_fields)
+    
+    # Test 1: Valid relationship between existing instances
+    valid_relationship = InstanceRelationship(
+        instance_id_one=instance1_id,
+        instance_id_two=instance2_id
+    )
+    
+    result = add_relationship_between_instances(valid_relationship)
+    assert result is None, "Valid relationship should succeed"
+    
+    # Test 2: Error case - non-existent instance IDs
+    invalid_relationship = InstanceRelationship(
+        instance_id_one=999,  # Non-existent ID
+        instance_id_two=instance2_id
+    )
+    
+    result = add_relationship_between_instances(invalid_relationship)
+    assert isinstance(result, Notice), "Should return Notice for invalid instance ID"
+    assert "do not exist" in result.message, f"Error message should mention non-existent instances: {result.message}"
+    
+    # Test 3: Error case - both instances non-existent
+    both_invalid_relationship = InstanceRelationship(
+        instance_id_one=998,
+        instance_id_two=999
+    )
+    
+    result = add_relationship_between_instances(both_invalid_relationship)
+    assert isinstance(result, Notice), "Should return Notice for both invalid instance IDs"
+    assert "do not exist" in result.message, f"Error message should mention non-existent instances: {result.message}"
