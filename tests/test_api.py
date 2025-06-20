@@ -1,5 +1,6 @@
 import pytest
 import asyncio
+from pydantic import BaseModel
 from enrichmcp_first_api.api import (
     get_app_dir,
     create_new_project,
@@ -10,6 +11,7 @@ from enrichmcp_first_api.api import (
     Project,
     ModelField
 )
+from enrichmcp_first_api.model import WorldBuilderEntity
 
 
 def test_mocked_user_data_dir_contains_tmp(mock_user_data_dir):
@@ -95,6 +97,14 @@ async def test_create_entity(mock_user_data_dir):
     
     # Verify no error was returned
     assert result is None
+    
+    # Verify the entity was created and is properly typed
+    entities = await list_world_builder_entities()
+    assert len(entities) == 1
+    created_entity = entities[0]
+    assert created_entity.__name__ == "Character"
+    assert issubclass(created_entity, BaseModel), f"Created entity {created_entity.__name__} should be a subclass of BaseModel"
+    assert issubclass(created_entity, WorldBuilderEntity), f"Created entity {created_entity.__name__} should be a subclass of WorldBuilderEntity"
 
 
 @pytest.mark.asyncio
@@ -133,3 +143,7 @@ async def test_list_entities_with_entity(mock_user_data_dir):
     # Verify we get one entity back
     assert len(entities) == 1
     assert entities[0].__name__ == "Character"
+    
+    # Verify it's properly typed as a BaseModel and WorldBuilderEntity subclass
+    assert issubclass(entities[0], BaseModel), f"Entity {entities[0].__name__} should be a subclass of BaseModel"
+    assert issubclass(entities[0], WorldBuilderEntity), f"Entity {entities[0].__name__} should be a subclass of WorldBuilderEntity"
