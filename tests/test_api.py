@@ -15,13 +15,29 @@ from enrichmcp_first_api.api import (
     get_instance_by_id,
     get_entity_by_name,
     get_last_inserted_instance_id,
+    add_relationship_to_entity_schema,
     Project,
-    ModelField
+    ModelField,
+    EntitySchemaRelationship,
+    Notice
 )
 from enrichmcp_first_api.model import WorldBuilderEntity
 
 
 # Test utility functions
+@pytest.fixture
+def relationship_test_data():
+    """Fixture providing two different entities for relationship testing."""
+    entity1_name, entity1_fields = generate_random_entity()
+    entity2_name, entity2_fields = generate_random_entity()
+    
+    # Ensure entities have different names
+    while entity2_name == entity1_name:
+        entity2_name, entity2_fields = generate_random_entity()
+    
+    return entity1_name, entity1_fields, entity2_name, entity2_fields
+
+
 def generate_random_entity() -> tuple[str, list[ModelField]]:
     """
     Generate a random entity with random name and fields.
@@ -350,3 +366,73 @@ def test_generate_random_instance():
     unknown_field = [ModelField(name="test", type="unknown", description="Test")]
     unknown_instance = generate_random_instance("Unknown", unknown_field)
     assert unknown_instance["test"] == "default_test"
+
+
+@pytest.mark.parametrize("cardinality", [
+    "one_to_one", "one_to_many", "many_to_one", "many_to_many"
+])
+@pytest.mark.asyncio
+async def test_entity_relationship_cardinality(mock_user_data_dir, relationship_test_data, cardinality):
+    """Test creating relationships between entities with different cardinalities."""
+    # Setup project
+    project = Project(id="test_project", name="Test Project", theme="fantasy")
+    await create_new_project(project)
+    
+    # Unpack test data
+    entity1_name, entity1_fields, entity2_name, entity2_fields = relationship_test_data
+    
+    # Create both entities
+    result1 = await create_world_builder_entity(entity1_name, entity1_fields)
+    result2 = await create_world_builder_entity(entity2_name, entity2_fields)
+    assert result1 is None and result2 is None
+    
+    # Create schema relationship
+    relationship = EntitySchemaRelationship(
+        world_builder_entity_name_one=entity1_name,
+        world_builder_entity_name_two=entity2_name,
+        cardinality=cardinality
+    )
+    
+    # Add relationship to schema
+    result = add_relationship_to_entity_schema(relationship)
+    
+    # Verify relationship was added successfully
+    assert isinstance(result, Notice), f"Expected Notice, got {type(result)}"
+    assert "added successfully" in result.message, f"Expected success message, got: {result.message}"
+    
+    # Verify entities were updated by getting fresh entities from the updated MODELS list
+    from enrichmcp_first_api.api import MODELS
+    
+    # Find the updated entity classes in MODELS
+    entity1_class = None
+    entity2_class = None
+    for model in MODELS:
+        if model.__name__ == entity1_name:
+            entity1_class = model
+        elif model.__name__ == entity2_name:
+            entity2_class = model
+    
+    assert entity1_class is not None, f"Entity {entity1_name} should exist in MODELS after relationship creation"
+    assert entity2_class is not None, f"Entity {entity2_name} should exist in MODELS after relationship creation"
+    
+    # Basic verification that relationship fields were added
+    entity1_fields_dict = entity1_class.model_fields
+    entity2_fields_dict = entity2_class.model_fields
+    
+    # Check that entities have new fields (relationship fields should reference the other entity)
+    original_field_count1 = len(entity1_fields)
+    original_field_count2 = len(entity2_fields)
+    
+    # Should have more fields now due to relationships
+    assert len(entity1_fields_dict) > original_field_count1, f"Entity1 should have relationship fields added. Original: {original_field_count1}, Current: {len(entity1_fields_dict)}"
+    assert len(entity2_fields_dict) > original_field_count2, f"Entity2 should have relationship fields added. Original: {original_field_count2}, Current: {len(entity2_fields_dict)}"
+    
+    # Verify that relationship fields have correct metadata
+    relationship_found = False
+    for field_name, field in entity1_fields_dict.items():
+        json_extra = getattr(field, 'json_schema_extra', {}) or {}
+        if json_extra.get('is_relationship', False):
+            relationship_found = True
+            assert json_extra.get('target_instance_type') == entity2_name, f"Relationship should target {entity2_name}"
+    
+    assert relationship_found, f"Entity1 should have at least one relationship field"
