@@ -365,6 +365,21 @@ def get_instance_by_id(id: int) -> Optional[WorldBuilderEntity]:
         return None
 
 
+@app.resource(description="Fetch a world builder entity class by its name.")
+def get_entity_by_name(name: str) -> Optional[Type[WorldBuilderEntity]]:
+    LOG.info(f"Looking for entity with name: {name}")
+    try:
+        entity_class = get_world_builder_entity_class_by_name(name)
+        if entity_class is None:
+            LOG.warning(f"Could not find entity with name {name}.")
+            return None
+        LOG.info(f"Found entity {name}: {entity_class}")
+        return entity_class
+    except Exception as e:
+        LOG.exception(f"Unexpected error retrieving entity with name {name}: {e}")
+        return None
+
+
 @app.resource(description="Get a list of all instances of a world builder entity type.")
 def list_entity_instances(world_builder_entity_name: str) -> list[InstanceWithId]:
     """world_builder_entity_name is the exact class name of the correct pydantic model"""

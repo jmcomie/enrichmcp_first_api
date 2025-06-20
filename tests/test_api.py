@@ -13,6 +13,7 @@ from enrichmcp_first_api.api import (
     list_world_builder_entities,
     create_world_builder_entity_instance,
     get_instance_by_id,
+    get_entity_by_name,
     get_last_inserted_instance_id,
     Project,
     ModelField
@@ -210,6 +211,31 @@ async def test_list_entities_with_entity(mock_user_data_dir):
     # Verify it's properly typed as a BaseModel and WorldBuilderEntity subclass
     assert issubclass(entities[0], BaseModel), f"Entity {entities[0].__name__} should be a subclass of BaseModel"
     assert issubclass(entities[0], WorldBuilderEntity), f"Entity {entities[0].__name__} should be a subclass of WorldBuilderEntity"
+
+
+@pytest.mark.asyncio
+async def test_get_entity_by_name(mock_user_data_dir):
+    """Test retrieving an entity by its name."""
+    # Create and open a project first
+    project = Project(id="test_project", name="Test Project", theme="fantasy")
+    await create_new_project(project)
+    
+    # Generate and create random entity
+    entity_name, fields = generate_random_entity()
+    await create_world_builder_entity(entity_name, fields)
+    
+    # Get the entity by name
+    retrieved_entity = get_entity_by_name(entity_name)
+    
+    # Verify the entity was retrieved correctly
+    assert retrieved_entity is not None, f"Should be able to retrieve entity with name {entity_name}"
+    assert retrieved_entity.__name__ == entity_name, f"Retrieved entity should have name {entity_name}"
+    assert issubclass(retrieved_entity, BaseModel), f"Retrieved entity should be a subclass of BaseModel"
+    assert issubclass(retrieved_entity, WorldBuilderEntity), f"Retrieved entity should be a subclass of WorldBuilderEntity"
+    
+    # Test retrieving non-existent entity
+    non_existent_entity = get_entity_by_name("NonExistentEntity")
+    assert non_existent_entity is None, "Should return None for non-existent entity name"
 
 
 @pytest.mark.asyncio
