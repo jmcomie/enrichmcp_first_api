@@ -6,27 +6,21 @@ import time
 from typing import Literal, Optional
 from altair import Type
 from enrichmcp import EnrichMCP, EnrichModel, Relationship
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 from functools import cache
 import base64
 from io import BytesIO
 from appdirs import user_data_dir
 from pathlib import Path
 import logging
-from typing import ForwardRef
 import enrichmcp_first_api
 from enrichmcp_first_api.lib.logger import FileLogger
-import importlib
-import sys
-import importlib.util
 
 from enrichmcp_first_api.model import WorldBuilderEntity
 # Create the application
 app = EnrichMCP(title="WorldBuilder", description="A simple API for world building and creating new character classes, buildings, towns, and relationships. A project must always be opened before any models are created or modified.")
 MODELS_DIRECTORY: Path = Path(f"{enrichmcp_first_api.__path__[0]}/models")
 PROJECT_FILE_NAME: str = "project.json"
-
-FORWARD_REF_SEMAPHORE: str = "FORWARD_REF:"
 
 MODELS: list[Type[EnrichModel]] = []
 INSTANCES_FILENAME: str = "instances.json"
@@ -65,7 +59,7 @@ def get_model_path(model_name: str) -> str:
     if CURRENT_OPEN_PROJECT is None:
         raise ValueError("No project is currently open. Please open a project before accessing models.")
     project_path: Path = Path(get_path_to_project(CURRENT_OPEN_PROJECT.id))
-    model_path: Path = project_path / "models" / f"{model_name}.py"
+    model_path: Path = project_path / "models" / f"{model_name}.json"
     return model_path
 
 
@@ -103,85 +97,126 @@ class RelationshipField(BaseModel):
 # RelationshipCardinality = Literal["one_to_one", "one_to_many", "many_to_one", "many_to_many"]
 
 
-def model_string_from_fields(name: str, model_fields: list[ModelField], relationships: list[RelationshipField] = []) -> str:
+def model_schema_from_fields(name: str, model_fields: list[ModelField], relationships: list[RelationshipField] = []) -> dict:
     """
-    Add a model to the EnrichMCP application.
-    This is used to register models that can be used in the current project.
+    Create a model schema dictionary from fields and relationships.
+    This is used to define models that can be used in the current project.
     """
-    # iterate over the fields and create a string representation of the model
-    model_str: str = f"""\
-from enrichmcp import EnrichMCP, EnrichModel, Relationship
-from pydantic import Field
-from enrichmcp_first_api.model import WorldBuilderEntity
-
-class {name}(WorldBuilderEntity):
-    \"\"\"A pydantic model named {name} with fields: {', '.join([field.name for field in model_fields])}.\"\"\"
-"""
+    schema = {
+        "name": name,
+        "fields": [],
+        "relationships": []
+    }
+    
     for field in model_fields:
-        model_str += f"    {field.name}: {field.type} = Field(description=\"{field.description}\")\n"
+        schema["fields"].append({
+            "name": field.name,
+            "type": field.type,
+            "description": field.description
+        })
+    
     for relation_field in relationships:
-        type_str = 'list[int]' if relation_field.side_cardinality == "many" else 'int'
-        model_str += f"    {relation_field.name}: {type_str} = Field(default=None, description=\"{relation_field.description}\")\n"
-    model_str += "\n"
-    return model_str
-
-
-def import_module_from_path(module_name, module_path, force_reload=False):
-    """Imports a module from a given file path and applies entity decorators to all classes."""
-    if not os.path.exists(module_path):
-        raise FileNotFoundError(f"Module file not found: {module_path}")
+        schema["relationships"].append({
+            "name": relation_field.name,
+            "target": relation_field.target,
+            "side_cardinality": relation_field.side_cardinality,
+            "description": relation_field.description
+        })
     
-    # Simple force reload - just remove from sys.modules
-    #if force_reload and module_name in sys.modules:
-    #    del sys.modules[module_name]
-    #    # Optionally clear MODELS list if you want to start fresh
-    #    MODELS.clear()  # Add this line if you want to clear all models
-    
-    spec = importlib.util.spec_from_file_location(module_name, module_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Could not load spec for module '{module_name}' from '{module_path}'")
-
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module  # Optional: only if global/module cache needed
-    spec.loader.exec_module(module)
-
-    # Apply entity decorator to all classes in the module
-    for name in dir(module):
-        obj = getattr(module, name)
-        # Check if it's a class and not a built-in/imported class
-        if (isinstance(obj, type) and 
-            obj.__module__ == module_name and 
-            hasattr(obj, '__doc__') and 
-            obj.__doc__):
-            # Apply the decorator manually
-            decorated_class = app.entity(obj)
-            setattr(module, name, decorated_class)
-            MODELS.append(decorated_class)
-    return module
+    return schema
 
 
-def write_model_to_file_and_import(model_name: str, model_fields: list[ModelField], relationships: list[RelationshipField] = [], force_reload= False) -> None:
+def create_model_from_schema(schema: dict) -> Type[WorldBuilderEntity]:
     """
-    Write the model to a file in the current project directory.
+    Create a pydantic model class from a schema dictionary.
+    """
+    name = schema["name"]
+    field_definitions = {}
+    
+    # Add regular fields
+    for field_def in schema["fields"]:
+        field_name = field_def["name"]
+        field_type = field_def["type"]
+        field_description = field_def["description"]
+        
+        # Convert string type names to actual types
+        type_mapping = {
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "date": date
+        }
+        
+        actual_type = type_mapping.get(field_type, str)
+        field_definitions[field_name] = (actual_type, Field(description=field_description))
+    
+    # Add relationship fields
+    for rel_def in schema["relationships"]:
+        rel_name = rel_def["name"]
+        rel_description = rel_def["description"]
+        rel_cardinality = rel_def["side_cardinality"]
+        rel_target = rel_def["target"]
+        
+        if rel_cardinality == "many":
+            field_definitions[rel_name] = (Optional[list[int]], Field(
+                default=None, 
+                description=rel_description,
+                json_schema_extra={
+                    "is_relationship": True,
+                    "target_instance_type": rel_target
+                }
+            ))
+        else:
+            field_definitions[rel_name] = (Optional[int], Field(
+                default=None, 
+                description=rel_description,
+                json_schema_extra={
+                    "is_relationship": True,
+                    "target_instance_type": rel_target
+                }
+            ))
+    
+    # Create the model class with a docstring
+    model_class = create_model(name, __base__=WorldBuilderEntity, **field_definitions)
+    
+    # Add a docstring for the entity decorator
+    field_names = [field_def["name"] for field_def in schema["fields"]]
+    model_class.__doc__ = f"A pydantic model named {name} with fields: {', '.join(field_names)}."
+    
+    # Apply the entity decorator
+    decorated_class = app.entity(model_class)
+    
+    return decorated_class
+
+
+
+def write_model_to_file_and_create(model_name: str, model_fields: list[ModelField], relationships: list[RelationshipField] = []) -> None:
+    """
+    Write the model schema to a JSON file in the current project directory and create the model class.
     This is used to persist the model definition.
     """
     LOG.info(f"Writing model {model_name} with fields: {model_fields}")
-    model_path: Path = get_model_path(model_name)
+    model_path: Path = Path(get_model_path(model_name))
     if not model_path.parent.exists():
         model_path.parent.mkdir(parents=True, exist_ok=True)
     if model_path.exists():
         LOG.warning(f"Model file {model_path} already exists. It will be overwritten.")
-    model_str: str = model_string_from_fields(model_name, model_fields, relationships)
+    
+    # Create schema and write to JSON
+    schema: dict = model_schema_from_fields(model_name, model_fields, relationships)
     with open(model_path, 'w', encoding='utf-8') as f:
-        f.write(model_str)
-    LOG.info(f"Model {model_name} written to {model_path}")
+        json.dump(schema, f, indent=2)
+    LOG.info(f"Model schema {model_name} written to {model_path}")
+    
     try:
-        importlib.invalidate_caches()  # Clear the import cache
-        # import model_path
-        import_module_from_path(model_name, model_path, force_reload=force_reload)
+        # Create the model class and add to MODELS
+        model_class = create_model_from_schema(schema)
+        MODELS.append(model_class)
+        LOG.info(f"Model {model_name} created and registered successfully.")
     except Exception as e:
-        LOG.error(f"Error importing model {model_name} from {model_path}: {e}")
-        raise ImportError(f"Error importing model {model_name} from {model_path}: {e}")
+        LOG.error(f"Error creating model {model_name}: {e}")
+        raise ImportError(f"Error creating model {model_name}: {e}")
 
 
 @app.resource(description="This is an optional error response. If an error occurs, attempt correct and call tool again")
@@ -198,7 +233,7 @@ async def create_world_builder_entity(name: str, fields: list[ModelField]) -> Op
      see the new model."""
     LOG.info(f"Creating model {name} with fields: {fields}")
     try:
-        write_model_to_file_and_import(name, fields)
+        write_model_to_file_and_create(name, fields)
     except Exception as e:
         LOG.exception(f"Error creating model {name}: {e}")
         return ErrorResponse(error=f"Error creating model {name}: {e}; provide this error to user.")
@@ -210,13 +245,15 @@ async def list_world_builder_entities() -> list[Type[EnrichModel]]:
     if not MODELS:
         project_path: Path = Path(get_path_to_project(CURRENT_OPEN_PROJECT.id))
         model_path: Path = project_path / "models"
-        for model_file in model_path.glob("*.py"):
-            if model_file.name.startswith("__") or model_file.name == "base.py":
-                continue
-            try:
-                import_module_from_path(model_file.stem, model_file)
-            except Exception as e:
-                LOG.error(f"Error loading model {model_file}: {e}")
+        if model_path.exists():
+            for model_file in model_path.glob("*.json"):
+                try:
+                    with open(model_file, 'r', encoding='utf-8') as f:
+                        schema = json.load(f)
+                    model_class = create_model_from_schema(schema)
+                    MODELS.append(model_class)
+                except Exception as e:
+                    LOG.error(f"Error loading model {model_file}: {e}")
     return MODELS
 
 
@@ -404,12 +441,17 @@ def get_model_fields_and_relationships_from_entity(entity: Type[WorldBuilderEnti
     relationships: list[RelationshipField] = []
     
     for field_name, field in entity.model_fields.items():
-        if FORWARD_REF_SEMAPHORE in field.description:
+        # Check if this is a relationship field using the new metadata
+        json_extra = getattr(field, 'json_schema_extra', {})
+        is_relationship = json_extra.get('is_relationship', False)
+        
+        if is_relationship:
             # Handle relationship fields
-            side_cardinality: SideCardinality = "many" if field.type == list else "one"
+            side_cardinality: SideCardinality = "many" if field.annotation == Optional[list[int]] else "one"
+            target_type = json_extra.get('target_instance_type', field_name)
             relationships.append(RelationshipField(
                 name=entity.__name__,
-                target=field_name,
+                target=target_type,
                 side_cardinality=side_cardinality,
                 description=field.description
             ))
@@ -462,13 +504,13 @@ def _add_relationship_to_entity_schema(relationship: EntitySchemaRelationship) -
             name=relationship.world_builder_entity_name_two if entity_type.__name__ == relationship.world_builder_entity_name_one else relationship.world_builder_entity_name_one,
             target=target,
             side_cardinality=side_cardinality,
-            description=f"A relationship to {side_cardinality} {target} instance(s). {FORWARD_REF_SEMAPHORE}:{target}"
+            description=f"A relationship to {side_cardinality} {target} instance(s)."
         ))
         global MODELS
         MODELS = [model for model in MODELS if model.__name__ != entity_type.__name__]
 
         # Write the updated model to file
-        write_model_to_file_and_import(entity_type.__name__, model_fields, relationships, force_reload=True)
+        write_model_to_file_and_create(entity_type.__name__, model_fields, relationships)
 
 
 @app.resource(description="Add a relationship to the entity schema. This is used to define the relationship schema between two world builder entities.")
@@ -516,7 +558,9 @@ def has_empty_relationship(instance: WorldBuilderEntity):
     # Returns if an instance has a relationship field
     # with no value.
     for field_name, field in instance.__class__.model_fields.items():
-        if FORWARD_REF_SEMAPHORE in field.description:
+        json_extra = getattr(field, 'json_schema_extra', {})
+        is_relationship = json_extra.get('is_relationship', False)
+        if is_relationship:
             if not getattr(instance, field_name) and getattr(instance, field_name) != 0:
                 LOG.info(f"Instance {instance.__class__.__name__} has empty relationship field: {field_name}")
                 return True
