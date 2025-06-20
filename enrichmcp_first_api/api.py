@@ -34,6 +34,7 @@ CLASSNAME_FIELD_NAME: str = "__class_name__"
 LAST_INSERTED_INSTANCE_ID: Optional[int] = None
 LAST_UPDATED_INSTANCE_ID: Optional[int] = None
 
+
 def get_path_to_project(project_id: str) -> str:
     """
     Get the path to the project directory based on the project ID.
@@ -131,10 +132,10 @@ def import_module_from_path(module_name, module_path, force_reload=False):
         raise FileNotFoundError(f"Module file not found: {module_path}")
     
     # Simple force reload - just remove from sys.modules
-    if force_reload and module_name in sys.modules:
-        del sys.modules[module_name]
-        # Optionally clear MODELS list if you want to start fresh
-        MODELS.clear()  # Add this line if you want to clear all models
+    #if force_reload and module_name in sys.modules:
+    #    del sys.modules[module_name]
+    #    # Optionally clear MODELS list if you want to start fresh
+    #    MODELS.clear()  # Add this line if you want to clear all models
     
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     if spec is None or spec.loader is None:
@@ -157,6 +158,7 @@ def import_module_from_path(module_name, module_path, force_reload=False):
             setattr(module, name, decorated_class)
             MODELS.append(decorated_class)
     return module
+
 
 def write_model_to_file_and_import(model_name: str, model_fields: list[ModelField], relationships: list[RelationshipField] = [], force_reload= False) -> None:
     """
@@ -484,7 +486,7 @@ def add_relationship_to_entity_schema(relationship: EntitySchemaRelationship) ->
     return Notice(message=f"Relationship {relationship.world_builder_entity_name_one} to {relationship.world_builder_entity_name_two} with cardinality {relationship.cardinality} added successfully.")
 
 
-@app.resource(description="This is not currently fucntionality.  Do not call. Add a relationship between two world builder entities per their cardinality. e.g. if the relationship is one-to-many, then the first instance will have a list of second instances.")
+@app.resource(description="Add a relationship between two world builder entities per their cardinality. e.g. if the relationship is one-to-many, then the first instance will have a list of second instances.")
 def add_relationship_between_instances(instance_relationship: InstanceRelationship) -> Optional[Notice]:
     LOG.info(f"Adding relationship between instances: {instance_relationship.instance_id_one} and {instance_relationship.instance_id_two}")
     try:
